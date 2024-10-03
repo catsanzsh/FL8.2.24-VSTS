@@ -1,0 +1,192 @@
+// EggmanVST.cpp
+#include "public.sdk/source/main/pluginfactory.h"
+#include "public.sdk/source/vst/vstaudioeffect.h"
+#include "public.sdk/source/vst/vsteditcontroller.h"
+#include "base/source/fstreamer.h"
+#include <cmath>
+
+using namespace Steinberg;
+using namespace Steinberg::Vst;
+
+// Unique IDs for the plugin components
+#define MYVST3_UID "12345678-ABCD-EF12-3456-123456789ABC"
+#define MYVST3_NAME "EggmanVST 1.0"
+#define MYVST3_VENDOR "YourName"
+#define MYVST3_URL "http://yourwebsite.com"
+#define MYVST3_EMAIL "mailto:youremail@domain.com"
+
+const FUID ProcessorUID(0x12345678, 0xABCD, 0xEF12, 0x3456);
+const FUID ControllerUID(0x87654321, 0xDCBA, 0x21FE, 0x6543);
+
+//---------------------------------------------------------------------------------------------
+// Audio Processor Class
+//---------------------------------------------------------------------------------------------
+class EggmanProcessor : public AudioEffect
+{
+public:
+    EggmanProcessor()
+    : frequency(440.0f), phase(0.0f), sampleRate(44100.0f), amplitude(0.5f)
+    {
+        setControllerClass(ControllerUID);
+    }
+
+    static FUnknown* createInstance(void*) { return (IAudioProcessor*)new EggmanProcessor(); }
+
+    // AudioEffect overrides
+    tresult PLUGIN_API initialize(FUnknown* context) SMTG_OVERRIDE
+    {
+        tresult result = AudioEffect::initialize(context);
+        if (result != kResultOk)
+            return result;
+
+        // Add audio outputs
+        addAudioOutput(STR16("Stereo Out"), SpeakerArr::kStereo);
+
+        return kResultOk;
+    }
+
+    tresult PLUGIN_API process(ProcessData& data) SMTG_OVERRIDE
+    {
+        if (data.numOutputs == 0)
+            return kResultOk;
+
+        if (data.processContext)
+            sampleRate = data.processContext->sampleRate;
+
+        generateSound(data);
+
+        return kResultOk;
+    }
+
+    void generateSound(ProcessData& data)
+    {
+        AudioBusBuffers& out = data.outputs[0];
+        float** outChannels = out.channelBuffers32;
+        int32 sampleFrames = data.numSamples;
+
+        float phaseIncrement = (2.0f * M_PI * frequency) / sampleRate;
+
+        for (int32 i = 0; i < sampleFrames; ++i)
+        {
+            // Simple sine wave generator
+            float sampleValue = amplitude * sinf(phase);
+
+            // Bit depth reduction to 16-bit
+            int16_t intSample = static_cast<int16_t>(sampleValue * 32767);
+            sampleValue = intSample / 32767.0f;
+
+            // Output to both channels
+            outChannels[0][i] = sampleValue;
+            outChannels[1][i] = sampleValue;
+
+            // Update phase
+            phase += phaseIncrement;
+            if (phase >= 2.0f * M_PI)
+                phase -= 2.0f * M_PI;
+        }
+    }
+
+    tresult PLUGIN_API setState(IBStream* state) SMTG_OVERRIDE
+    {
+        IBStreamer streamer(state, kLittleEndian);
+        if (!streamer.readFloat(frequency))
+            return kResultFalse;
+        if (!streamer.readFloat(amplitude))
+            return kResultFalse;
+        return kResultOk;
+    }
+
+    tresult PLUGIN_API getState(IBStream* state) SMTG_OVERRIDE
+    {
+        IBStreamer streamer(state, kLittleEndian);
+        if (!streamer.writeFloat(frequency))
+            return kResultFalse;
+        if (!streamer.writeFloat(amplitude))
+            return kResultFalse;
+        return kResultOk;
+    }
+
+private:
+    float frequency;
+    float phase;
+    float sampleRate;
+    float amplitude;
+};
+
+//---------------------------------------------------------------------------------------------
+// Controller Class
+//---------------------------------------------------------------------------------------------
+class EggmanController : public EditController
+{
+public:
+    EggmanController() {}
+    virtual ~EggmanController() {}
+
+    static FUnknown* createInstance(void*) { return (IEditController*)new EggmanController(); }
+
+    // EditController overrides
+    tresult PLUGIN_API initialize(FUnknown* context) SMTG_OVERRIDE
+    {
+        tresult result = EditController::initialize(context);
+        if (result != kResultOk)
+            return result;
+
+        // Define parameters
+        parameters.addParameter(STR16("Frequency"), nullptr, 0, 440.0f, ParameterInfo::kCanAutomate, 0);
+        parameters.addParameter(STR16("Amplitude"), nullptr, 0, 0.5f, ParameterInfo::kCanAutomate, 1);
+
+        return kResultOk;
+    }
+
+    tresult PLUGIN_API setComponentState(IBStream* state) SMTG_OVERRIDE
+    {
+        IBStreamer streamer(state, kLittleEndian);
+        float freq = 0.f, amp = 0.f;
+        if (!streamer.readFloat(freq))
+            return kResultFalse;
+        if (!streamer.readFloat(amp))
+            return kResultFalse;
+
+        setParamNormalized(0, freq / 20000.0f); // Assuming freq max is 20kHz
+        setParamNormalized(1, amp);
+
+        return kResultOk;
+    }
+
+    IPlugView* PLUGIN_API createView(FIDString name) SMTG_OVERRIDE
+    {
+        if (FIDStringsEqual(name, ViewType::kEditor))
+        {
+            // GUI implementation would go here
+            return nullptr; // Placeholder
+        }
+        return nullptr;
+    }
+};
+
+//---------------------------------------------------------------------------------------------
+// Plugin Factory
+//---------------------------------------------------------------------------------------------
+BEGIN_FACTORY_DEF(MYVST3_VENDOR, MYVST3_URL, MYVST3_EMAIL)
+
+DEF_CLASS2(INLINE_UID_FROM_FUID(ProcessorUID),
+    PClassInfo::kManyInstances,
+    kVstAudioEffectClass,
+    MYVST3_NAME,
+    Vst::kDistributable,
+    Vst::PlugType::kFxSynth,
+    FULL_VERSION_STR,
+    kVstVersionString,
+    EggmanProcessor::createInstance)
+
+DEF_CLASS2(INLINE_UID_FROM_FUID(ControllerUID),
+    PClassInfo::kManyInstances,
+    kVstComponentControllerClass,
+    MYVST3_NAME " Controller",
+    0,
+    "",
+    FULL_VERSION_STR,
+    kVstVersionString,
+    EggmanController::createInstance)
+
+END_FACTORY
